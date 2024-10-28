@@ -33,10 +33,10 @@ collection_name = "AclGPT"
 # # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # PDF_PATH = os.getenv("PDF_path")
 
-GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+
 QDRANT_URL = st.secrets["QDRANT_URL"]
 QDRANT_API_KEY = st.secrets["QDRANT_API_KEY"]
-PDF_PATH = st.secrets["PDF_path"]
+
 
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 
