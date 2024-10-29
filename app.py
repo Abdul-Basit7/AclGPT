@@ -15,6 +15,8 @@ from io import BytesIO
 import os
 from dotenv import load_dotenv
 
+QDRANT_API_KEY = st.secrets["QDRANT_API_KEY"]
+QDRANT_URL = st.secrets["QDRANT_URL"]
 # Initialize session state
 @st.cache_resource
 def init_session_state():
