@@ -27,16 +27,11 @@ load_dotenv()
 
 # Setting Environment Variables
 collection_name = "AclGPT"
-# # GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-# QDRANT_URL = os.getenv("QDRANT_URL")
-# QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-# # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# PDF_PATH = os.getenv("PDF_path")
-
-
-QDRANT_URL = st.secrets["QDRANT_URL"]
+# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 QDRANT_API_KEY = st.secrets["QDRANT_API_KEY"]
+QDRANT_URL = st.secrets["QDRANT_URL"]
 
+#PDF_PATH = os.getenv("PDF_path")
 
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 
@@ -101,6 +96,8 @@ def process_document():
 
 def create_qdrant():
     # Create Qdrant client
+    
+
     client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
     # Check if the collection already exists
@@ -160,6 +157,8 @@ def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
 
 def Retriver(input_query,llm):
     # Only create the Qdrant instance if it hasn't been initialized yet
+    print("QDRANT_URL:", QDRANT_URL)
+    print("QDRANT_API_KEY:", QDRANT_API_KEY)
     if not st.session_state.qdrant_initialized:
         documents = create_qdrant()
         st.session_state.qdrant = documents
