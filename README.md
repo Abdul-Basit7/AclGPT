@@ -7,13 +7,13 @@ ACLBot is a web-based tool designed to assist users with information and guidanc
 
 - Chat with AI: Ask questions related to ACL, and the AI provides clear, easy-to-understand responses.
 - Voice Responses: The AI's answers are also converted into speech, so you can listen to the information instead of just reading it.
-- Choose Your AI Model: Users can select from Google Mistral AI, Llama 3.1, or gemma2 to get
+- Choose Your AI Model: Users can select from Mistral AI, Llama 3.1, or gemma2 to get
 - PDF Analysis: The chatbot is equipped to analyze and extract information from PDFs containing ACL-related content. It uses the provided PDFs as its source of knowledge.
 
 
 ## How It Works
 1. Select AI Model: In the sidebar, choose the AI model you want to use:
-2. Google Gemini: Requires a Google API Key.
+2. Google Embeddings: Requires a Google API Key.
 Mistral AI or Llama 3.1: Both require a Groq API Key.
 
 3. Enter API Key: Input the required API key in the sidebar for the selected AI model.
@@ -24,7 +24,7 @@ Mistral AI or Llama 3.1: Both require a Groq API Key.
 
 To use this app, you need the following:
 
-- Google API Key (for Google Gemini model).
+- Google API Key (for Google Embeddings).
 - Groq API Key (for Mistral AI or Llama 3.1 models).
 - PDF files containing ACL-related content in a specific folder.
 - Access to a web browser to run the Streamlit application.
