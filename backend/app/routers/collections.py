@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import get_current_user, owned_collection
 from ..models import Collection, User
-from ..schemas import CollectionCreate, CollectionOut
-from ..services import ingest, vectorstore
+from ..schemas import CollectionCreate, CollectionOut, SuggestionsOut
+from ..services import ingest, llm as llm_service, rag, vectorstore
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 
@@ -58,6 +58,16 @@ def rename_collection(
     db.commit()
     db.refresh(collection)
     return _serialize(collection)
+
+
+@router.get("/{collection_id}/suggestions", response_model=SuggestionsOut)
+def collection_suggestions(
+    collection: Collection = Depends(owned_collection),
+) -> SuggestionsOut:
+    """Opening questions for a collection, before any chat exists to base them on."""
+    return SuggestionsOut(
+        suggestions=rag.suggest_questions(collection.id, [], llm_service.default_model())
+    )
 
 
 @router.delete("/{collection_id}", status_code=status.HTTP_204_NO_CONTENT)

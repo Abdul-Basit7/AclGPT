@@ -43,7 +43,17 @@ class Settings(BaseSettings):
     # CORS (the Vite dev server)
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    # RAG tuning
+    # Embeddings. "local" runs a small ONNX model on this machine: no API key, no
+    # quota, and fast enough to index a large PDF in seconds. "google" uses
+    # gemini-embedding-001, which scores slightly higher on retrieval benchmarks
+    # but is capped at 1,000 embed requests per day on the free tier -- and since
+    # every chunk is one request, a single large document can exhaust it.
+    embedding_provider: str = "local"  # local | google
+    # bge-small measured at ~11 chunks/sec here against ~4 for bge-base, for
+    # about one point of retrieval quality. Indexing speed matters more on large
+    # files, so small is the default; set LOCAL_EMBEDDING_MODEL to override.
+    local_embedding_model: str = "BAAI/bge-small-en-v1.5"
+    # Only used when embedding_provider == "google".
     embedding_model: str = "models/gemini-embedding-001"
     chunk_size: int = 1000
     chunk_overlap: int = 200
@@ -54,16 +64,27 @@ class Settings(BaseSettings):
     # Uploads
     max_upload_mb: int = 100
 
-    # Embedding throughput. Google's free tier allows ~100 embed requests per
-    # minute, and a large PDF is thousands of chunks, so indexing is paced and
-    # retried rather than fired all at once.
-    # Measured against the Google free tier: batches of 8 succeed in ~1s, while
-    # 16 is rejected instantly with a 429. Batch size -- not throughput -- is the
-    # binding constraint, so keep batches small and pace requests under the
-    # documented ~100/minute quota.
+    # Embedding throughput, used only for a remote provider. Google's free tier
+    # caps embed requests per *day* (1,000) as well as per minute, and each chunk
+    # is one request, so remote indexing is paced in small batches and retried.
     embed_batch_size: int = 8
     embed_requests_per_minute: int = 60
     embed_max_retries: int = 8
+
+    # A local model has no quota, so batches are large and nothing is paced.
+    local_embed_batch_size: int = 256
+
+    @property
+    def embeddings_are_local(self) -> bool:
+        return self.embedding_provider.strip().lower() == "local"
+
+    @property
+    def effective_embed_batch_size(self) -> int:
+        return (
+            self.local_embed_batch_size
+            if self.embeddings_are_local
+            else self.embed_batch_size
+        )
 
     @property
     def database_url(self) -> str:

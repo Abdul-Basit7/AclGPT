@@ -175,14 +175,18 @@ def _embed_in_batches(
     ids: List[str],
     on_progress,
 ) -> None:
-    """Index in paced batches, retrying rate-limit failures.
+    """Index in batches, retrying rate-limit failures.
 
-    Embedding every chunk in one call is what breaks large documents: the free
-    tier caps requests per minute, so a thousand-chunk PDF fails within seconds.
-    Batching plus pacing plus backoff makes it slow but reliable, and progress is
-    reported so the UI can show movement instead of appearing hung.
+    Embedding every chunk in one call is what breaks large documents on a remote
+    provider: the free tier caps requests per minute *and* per day, so a
+    thousand-chunk PDF fails within seconds. Batching plus pacing plus backoff
+    makes that slow but reliable. A local model has neither cap, so batches are
+    large and pacing is skipped entirely. Progress is reported either way, so the
+    UI shows movement instead of appearing hung.
     """
-    batch_size = max(settings.embed_batch_size, 1)
+    batch_size = max(settings.effective_embed_batch_size, 1)
+    # A local model has no quota to respect, so pacing would only slow it down.
+    paced = not settings.embeddings_are_local
     done = 0
 
     for start in range(0, len(chunks), batch_size):
@@ -190,7 +194,8 @@ def _embed_in_batches(
         batch_ids = ids[start : start + batch_size]
 
         for attempt in range(settings.embed_max_retries + 1):
-            _limiter.reserve(len(batch))
+            if paced:
+                _limiter.reserve(len(batch))
             try:
                 vectorstore.add_documents(collection_id, batch, batch_ids)
                 break

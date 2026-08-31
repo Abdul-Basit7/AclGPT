@@ -58,10 +58,18 @@ function Workspace({ token, email }: { token: string; email: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [documents, setDocuments] = useState<Doc[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  // Model and web-search choices made before any chat exists, so the controls
+  // work from the moment the app opens rather than only after a first message.
+  const [pendingModel, setPendingModel] = useState("");
+  const [pendingWebSearch, setPendingWebSearch] = useState(false);
 
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  // A failed turn leaves nothing in the transcript, so without this the user
+  // sees sources and no answer with no explanation -- a toast has long gone by
+  // the time they look. Web searches fail often enough for this to matter.
+  const [turnError, setTurnError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const [documentsOpen, setDocumentsOpen] = useState(false);
@@ -69,6 +77,8 @@ function Workspace({ token, email }: { token: string; email: string }) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [panelSources, setPanelSources] = useState<Source[]>([]);
   const [panelLabel, setPanelLabel] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -101,6 +111,7 @@ function Workspace({ token, email }: { token: string; email: string }) {
         setCollections(nextCollections);
         setChats(nextChats);
         setModels(nextModels);
+        setPendingModel((current) => current || nextModels[0]?.id || "");
         const firstCollection = nextCollections[0]?.id ?? null;
         setActiveCollectionId(firstCollection);
         setActiveChatId(
@@ -171,9 +182,72 @@ function Workspace({ token, email }: { token: string; email: string }) {
     return () => clearInterval(timer);
   }, [documents, activeCollectionId, refreshDocuments]);
 
+  // What to ask next: follow-ups once a chat has turns, opening questions drawn
+  // from the collection before that. Recomputed whenever the ground shifts.
+  useEffect(() => {
+    if (activeCollectionId === null) {
+      setSuggestions([]);
+      return;
+    }
+    // Chips from the previous turn are stale the moment a new one starts.
+    if (streaming || loadingMessages) {
+      setSuggestions([]);
+      return;
+    }
+
+    let cancelled = false;
+    setSuggestionsLoading(true);
+    const request =
+      activeChatId !== null && messages.length > 0
+        ? api.chatSuggestions(token, activeChatId)
+        : api.collectionSuggestions(token, activeCollectionId);
+
+    request
+      .then((result) => !cancelled && setSuggestions(result.suggestions))
+      // A failed suggestion is not worth a toast; the composer just stays bare.
+      .catch(() => !cancelled && setSuggestions([]))
+      .finally(() => !cancelled && setSuggestionsLoading(false));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    token,
+    activeCollectionId,
+    activeChatId,
+    messages.length,
+    documents.length,
+    streaming,
+    loadingMessages,
+  ]);
+
+  const createChat = useCallback(async () => {
+    if (activeCollectionId === null) return null;
+    const chat = await api.createChat(
+      token,
+      activeCollectionId,
+      pendingModel || undefined,
+      pendingWebSearch,
+    );
+    setChats((prev) => [chat, ...prev]);
+    setActiveChatId(chat.id);
+    return chat;
+  }, [token, activeCollectionId, pendingModel, pendingWebSearch]);
+
   const handleSend = useCallback(
     async (text: string) => {
-      if (!activeChat) return;
+      // Sending is what creates the first chat, so the model and web-search
+      // choices made on an empty screen are carried into it.
+      let chat = activeChat;
+      if (!chat) {
+        try {
+          chat = await createChat();
+        } catch (err) {
+          onApiError(err, "Could not start a new chat.");
+          return;
+        }
+      }
+      if (!chat) return;
       speech.stop();
 
       const optimistic: Message = {
@@ -183,11 +257,13 @@ function Workspace({ token, email }: { token: string; email: string }) {
         sources: [],
         input_tokens: null,
         output_tokens: null,
+        duration_ms: null,
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, optimistic]);
       setStreaming(true);
       setStreamingText("");
+      setTurnError(null);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -196,7 +272,7 @@ function Workspace({ token, email }: { token: string; email: string }) {
       try {
         await streamMessage(
           token,
-          activeChat.id,
+          chat.id,
           text,
           (event) => {
             if (event.type === "sources") {
@@ -207,7 +283,7 @@ function Workspace({ token, email }: { token: string; email: string }) {
             } else if (event.type === "token") {
               answer += event.text;
               setStreamingText(answer);
-            } else if (event.type === "error") toast.error(event.detail);
+            } else if (event.type === "error") setTurnError(event.detail);
           },
           controller.signal,
         );
@@ -221,7 +297,7 @@ function Workspace({ token, email }: { token: string; email: string }) {
 
         // Replace the optimistic view with what the server actually stored.
         try {
-          const stored = await api.listMessages(token, activeChat.id);
+          const stored = await api.listMessages(token, chat.id);
           setMessages(stored);
           const last = stored[stored.length - 1];
           if (autoSpeak && last?.role === "assistant") {
@@ -233,7 +309,32 @@ function Workspace({ token, email }: { token: string; email: string }) {
         api.listChats(token).then(setChats).catch(() => undefined);
       }
     },
-    [activeChat, token, autoSpeak, speech, onApiError],
+    [activeChat, createChat, token, autoSpeak, speech, onApiError],
+  );
+
+  const handleEditMessage = useCallback(
+    async (messageId: number, text: string) => {
+      if (!activeChat || streaming) return;
+      speech.stop();
+      try {
+        // Optimistic messages carry a negative id and were never stored, so
+        // there is nothing on the server to rewind for them.
+        if (messageId > 0) {
+          await api.deleteMessagesFrom(token, activeChat.id, messageId);
+        }
+      } catch (err) {
+        onApiError(err, "Could not rewind this chat.");
+        return;
+      }
+      setMessages((prev) => {
+        const index = prev.findIndex((m) => m.id === messageId);
+        return index === -1 ? prev : prev.slice(0, index);
+      });
+      setPanelSources([]);
+      setPanelLabel(null);
+      await handleSend(text);
+    },
+    [token, activeChat, streaming, speech, handleSend, onApiError],
   );
 
   const handleStop = useCallback(() => {
@@ -249,23 +350,19 @@ function Workspace({ token, email }: { token: string; email: string }) {
   const handleCopy = useCallback(async (value: string) => {
     try {
       await navigator.clipboard.writeText(value);
-      toast.success("Answer copied");
+      toast.success("Copied to clipboard");
     } catch {
       toast.error("Could not copy to the clipboard.");
     }
   }, []);
 
   const handleNewChat = useCallback(async () => {
-    if (activeCollectionId === null) return;
     try {
-      const chat = await api.createChat(token, activeCollectionId);
-      setChats((prev) => [chat, ...prev]);
-      setActiveChatId(chat.id);
-      setMessages([]);
+      if (await createChat()) setMessages([]);
     } catch (err) {
       onApiError(err, "Could not start a new chat.");
     }
-  }, [token, activeCollectionId, onApiError]);
+  }, [createChat, onApiError]);
 
   const handleDeleteChat = useCallback(
     async (chatId: number) => {
@@ -360,9 +457,20 @@ function Workspace({ token, email }: { token: string; email: string }) {
     [token, activeCollectionId, refreshDocuments, onApiError],
   );
 
+  const selectedModel = activeChat?.model ?? pendingModel;
+  const webSearchOn = activeChat?.web_search ?? pendingWebSearch;
+
   const handleModelChange = useCallback(
     async (model: string) => {
-      if (!activeChat) return;
+      if (!activeChat) {
+        setPendingModel(model);
+        // Web search cannot carry over to a model that lacks it; the server
+        // clears the flag too, so mirror that here instead of showing it on.
+        if (!models.find((m) => m.id === model)?.supports_web_search) {
+          setPendingWebSearch(false);
+        }
+        return;
+      }
       try {
         const updated = await api.updateChat(token, activeChat.id, { model });
         setChats((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
@@ -370,11 +478,28 @@ function Workspace({ token, email }: { token: string; email: string }) {
         onApiError(err, "Could not switch model.");
       }
     },
-    [token, activeChat, onApiError],
+    [token, activeChat, models, onApiError],
   );
 
+  const handleToggleWebSearch = useCallback(async () => {
+    if (!activeChat) {
+      setPendingWebSearch((v) => !v);
+      return;
+    }
+    try {
+      const updated = await api.updateChat(token, activeChat.id, {
+        web_search: !activeChat.web_search,
+      });
+      setChats((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    } catch (err) {
+      onApiError(err, "Could not change the web search setting.");
+    }
+  }, [token, activeChat, onApiError]);
+
   return (
-    <SidebarProvider defaultOpen={sidebarDefaultOpen()}>
+    /* h-svh, not the provider's default min-h-svh: without a fixed height the
+       document itself scrolls, carrying the header and composer off-screen. */
+    <SidebarProvider defaultOpen={sidebarDefaultOpen()} className="h-svh overflow-hidden">
       <AppSidebar
         email={email}
         collections={collections}
@@ -400,10 +525,17 @@ function Workspace({ token, email }: { token: string; email: string }) {
           streaming={streaming}
           loadingMessages={loadingMessages}
           documentCount={documents.length}
+          turnError={turnError}
+          onDismissError={() => setTurnError(null)}
+          selectedModel={selectedModel}
+          webSearch={webSearchOn}
+          canCompose={activeCollectionId !== null}
           speechSupported={speech.supported}
           speakingKey={speech.speakingKey}
           autoSpeak={autoSpeak}
           sourcesOpen={sourcesOpen}
+          suggestions={suggestions}
+          suggestionsLoading={suggestionsLoading}
           onToggleAutoSpeak={() => {
             setAutoSpeak((v) => !v);
             speech.stop();
@@ -413,8 +545,10 @@ function Workspace({ token, email }: { token: string; email: string }) {
           onToggleSourcesPanel={() => setSourcesOpen((v) => !v)}
           onCopy={handleCopy}
           onSend={handleSend}
+          onEditMessage={handleEditMessage}
           onStop={handleStop}
           onModelChange={handleModelChange}
+          onToggleWebSearch={handleToggleWebSearch}
           onOpenDocuments={() => setDocumentsOpen(true)}
           onNewChat={handleNewChat}
         />

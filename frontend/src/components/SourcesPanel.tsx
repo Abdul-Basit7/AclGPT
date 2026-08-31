@@ -1,4 +1,4 @@
-import { FileText, PanelRightClose, Quote } from "lucide-react";
+import { ExternalLink, FileText, Globe, PanelRightClose, Quote } from "lucide-react";
 
 import type { Source } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -39,22 +39,41 @@ function SourcesList({ sources }: { sources: Source[] }) {
   return (
     <ol className="space-y-3">
       {sources.map((source, index) => (
-        <li key={`${source.filename}-${source.page}-${index}`}>
+        <li key={`${source.url ?? source.filename}-${source.page}-${index}`}>
           <div className="flex items-baseline gap-2">
             <span className="bg-muted text-muted-foreground flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-medium">
               {index + 1}
             </span>
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">
-              {source.filename}
-            </span>
+            {/* A web result is a link; a document passage is plain text. */}
+            {source.url ? (
+              <a
+                href={source.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="group/src flex min-w-0 flex-1 items-baseline gap-1.5 text-sm font-medium hover:underline"
+              >
+                <Globe className="text-muted-foreground size-3 shrink-0 translate-y-0.5" />
+                <span className="min-w-0 flex-1 truncate">{source.filename}</span>
+                <ExternalLink className="text-muted-foreground size-3 shrink-0 translate-y-0.5 opacity-0 transition-opacity group-hover/src:opacity-100" />
+              </a>
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {source.filename}
+              </span>
+            )}
             {source.page !== null ? (
               <span className="text-muted-foreground shrink-0 text-xs">
                 p. {source.page}
               </span>
             ) : null}
           </div>
+          {source.url ? (
+            <p className="text-muted-foreground mt-0.5 truncate pl-7 text-[11px]">
+              {hostOf(source.url)}
+            </p>
+          ) : null}
           {source.snippet ? (
-            <p className="text-muted-foreground mt-1.5 pl-7 text-xs leading-relaxed">
+            <p className="text-muted-foreground mt-1.5 pl-7 text-xs leading-relaxed break-words">
               {source.snippet}
             </p>
           ) : null}
@@ -100,7 +119,7 @@ export function SourcesPanel({ open, sources, contextLabel, onClose }: Props) {
           </Button>
         </header>
 
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea className="min-h-0 w-full flex-1 [&>div>div]:!block">
           <div className="p-4">
             <SourcesList sources={sources} />
           </div>
@@ -126,7 +145,7 @@ export function SourcesPanel({ open, sources, contextLabel, onClose }: Props) {
             </SheetDescription>
           ) : null}
         </SheetHeader>
-        <ScrollArea className="min-h-0 flex-1">
+        <ScrollArea className="min-h-0 w-full flex-1 [&>div>div]:!block">
           <div className="p-4">
             <SourcesList sources={sources} />
           </div>
@@ -134,4 +153,13 @@ export function SourcesPanel({ open, sources, contextLabel, onClose }: Props) {
       </SheetContent>
     </Sheet>
   );
+}
+
+/** Domain only: the full URL is already the link target. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }

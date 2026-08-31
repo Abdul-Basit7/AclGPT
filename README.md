@@ -19,7 +19,10 @@ Sign in with Google, GitHub or an email address. Voice input and output use the 
 - **Light, dark and system themes** — switchable from the app or the sign-in page, remembered per browser, with no flash on load.
 - **Voice, both directions** — dictate questions with the microphone, and have answers read aloud, with an optional auto-read.
 - **Persistent history** — chats and messages live in SQLite and survive restarts.
-- **Model picker** — choose per chat from whichever Groq models your account can actually reach.
+- **Model picker** — available from the moment the app opens, before any question is sent; choose per chat from whichever Groq models your account can actually reach.
+- **Web search where it exists** — the control is enabled only for models the provider can actually search with, and disabled with an explanation elsewhere. Pages consulted appear in the sources panel as links.
+- **Local embeddings** — documents are embedded on your own machine by default, so indexing has no quota, needs no key and works offline.
+- **Response timing** — every answer shows when it arrived, with generation time on hover.
 
 ## Architecture
 
@@ -69,10 +72,10 @@ frontend/                   Vite + React 19 + TypeScript + Tailwind v4 + shadcn/
 
 - Python 3.9 or newer
 - Node.js 18 or newer
-- A **Google API key** for `gemini-embedding-001` document embeddings ([get one](https://aistudio.google.com/apikey)). A paid key is worth it for large documents — see [Indexing large documents](#indexing-large-documents).
 - A **Groq API key** for the chat model ([get one](https://console.groq.com/keys))
+- Optionally a **Google API key**, only if you switch embeddings back to `gemini-embedding-001` ([get one](https://aistudio.google.com/apikey)) — see [Embeddings](#embeddings)
 
-Both providers have free tiers. Voice needs no key. OAuth sign-in is optional.
+Embeddings run locally by default, so the chat model is the only thing that needs a key. Voice needs no key. OAuth sign-in is optional.
 
 ## Setup
 
@@ -86,9 +89,10 @@ cp backend/.env.example backend/.env
 Fill in `backend/.env`:
 
 ```ini
-GOOGLE_API_KEY=your_google_api_key
 GROQ_API_KEY=your_groq_api_key
 SECRET_KEY=a_long_random_string
+# Only needed if you set EMBEDDING_PROVIDER=google
+GOOGLE_API_KEY=your_google_api_key
 ```
 
 Generate a real `SECRET_KEY` before deploying — it signs both session and OAuth state tokens:
@@ -194,13 +198,16 @@ All optional, set in `backend/.env`.
 | `OAUTH_STATE_TTL_SECONDS` | `600` | How long a sign-in attempt stays valid |
 | `DATA_DIR` | `backend/data` | SQLite file, uploads and indexes |
 | `CORS_ORIGINS` | `http://localhost:5173,…` | Allowed origins, comma separated |
-| `EMBEDDING_MODEL` | `models/gemini-embedding-001` | Google embedding model |
+| `EMBEDDING_PROVIDER` | `local` | `local` (no key, no quota) or `google` |
+| `LOCAL_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Any model `fastembed` supports |
+| `EMBEDDING_MODEL` | `models/gemini-embedding-001` | Google embedding model, when provider is `google` |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1000` / `200` | Document splitting |
 | `RETRIEVAL_K` / `RETRIEVAL_FETCH_K` | `5` / `20` | Passages used, and the MMR candidate pool |
 | `HISTORY_TURNS` | `6` | Conversation turns sent as context |
 | `MAX_UPLOAD_MB` | `100` | Per-file upload limit |
-| `EMBED_BATCH_SIZE` | `8` | Chunks per embedding request (free tier rejects 16+) |
-| `EMBED_REQUESTS_PER_MINUTE` | `60` | Client-side pacing, charged per chunk |
+| `LOCAL_EMBED_BATCH_SIZE` | `256` | Chunks per batch when embedding locally |
+| `EMBED_BATCH_SIZE` | `8` | Chunks per request when provider is `google` |
+| `EMBED_REQUESTS_PER_MINUTE` | `60` | Pacing for `google` only, charged per chunk |
 | `EMBED_MAX_RETRIES` | `8` | Retries per batch when rate-limited |
 
 Chat models are discovered from the Groq API at runtime and cached for ten minutes, so a retired model id does not break the app; unknown ids fall back to the first available. `FALLBACK_MODELS` in `backend/app/services/llm.py` is used only when the API cannot be reached.
@@ -215,27 +222,29 @@ cd frontend && npx shadcn@latest add <component>
 
 The colour palette is the `:root` and `.dark` token blocks at the top of `frontend/src/index.css`. Both themes are always defined, so changing a token updates light and dark together. A small inline script in `index.html` applies the stored theme before first paint.
 
-## Indexing large documents
+## Embeddings
 
-Large files used to fail outright: a 160-page PDF is roughly 1,280 chunks, and
-embedding them in one call returned `429` within five seconds.
+Retrieval works by comparing your question against vectors built from your
+documents. Which model builds those vectors is the single biggest constraint on
+how large a document can be indexed.
 
-The constraint is Google's **per-minute** embedding quota on the free tier, and
-it counts **documents, not HTTP calls** — a batch of 8 chunks spends 8 units, not
-1. Pacing therefore has to be charged per chunk, which is what
-`EMBED_REQUESTS_PER_MINUTE` does. Retries also spend quota, since a retried batch
-re-sends every chunk in it.
+**Local is the default.** `fastembed` runs `BAAI/bge-small-en-v1.5` as an ONNX
+model in the API process: no key, no quota, no network, and the model downloads
+once (~67 MB) on first use. Measured on an M-series Mac:
 
-Sourcery now embeds in small batches, paces per chunk, retries rate-limit
-failures using the delay the provider asks for, commits progress after every
-batch so the UI can show a real percentage, and rolls back partially embedded
-chunks if a document ultimately fails — so the index never holds vectors that no
-document references.
+| Model | Dimensions | Speed | 1,280-chunk PDF |
+| --- | --- | --- | --- |
+| `BAAI/bge-small-en-v1.5` (default) | 384 | ~11 chunks/sec | ~2 min |
+| `BAAI/bge-base-en-v1.5` | 768 | ~4 chunks/sec | ~5 min |
 
-### The free tier has a hard daily ceiling
+bge-base scores about one point higher on retrieval benchmarks for 2.7× the
+indexing time, which is why small is the default. Set `LOCAL_EMBEDDING_MODEL` to
+any model `fastembed` supports.
 
-There are two separate quotas, and only one of them is something software can
-work around:
+**The remote option, and why it is no longer the default.** Setting
+`EMBEDDING_PROVIDER=google` uses `gemini-embedding-001`, which does score higher
+on retrieval benchmarks. Its free tier has two quotas, and only one can be worked
+around:
 
 | Quota | Free-tier limit | Can pacing help? |
 | --- | --- | --- |
@@ -243,24 +252,64 @@ work around:
 | `EmbedContentRequestsPerDay` | **1,000** | No |
 
 Each chunk is one request, so **a free key can embed roughly 1,000 chunks per
-day, in total, across every document.** That is about 125 pages of dense PDF. A
-1,280-chunk document simply cannot be indexed on a free key in one day, no matter
-how patiently it is paced.
+day in total, across every document** — about 125 pages of dense PDF. A
+1,280-chunk document cannot be indexed on a free key in one day, however
+patiently it is paced. That is the ceiling local embeddings remove entirely.
 
-Sourcery tells the two apart via the provider's `quota_id`: a per-minute limit is
-retried with backoff, while a daily limit fails immediately with an explanation
-rather than burning several minutes in retries that cannot succeed.
+The remote path still batches, paces per chunk (the quota counts documents, not
+HTTP calls, so a batch of 8 spends 8 units), retries per-minute failures using
+the delay the provider asks for, and fails a daily-quota error immediately rather
+than burning minutes on retries that cannot succeed. Either way, progress is
+committed after every batch so the UI shows a real percentage, and a document
+that ultimately fails has its partial vectors rolled back, so the index never
+holds chunks no document references.
 
-For anything beyond occasional small documents, use a paid Google key and raise
-`EMBED_REQUESTS_PER_MINUTE`. Other levers: raise `CHUNK_SIZE` so the same
-document needs fewer requests, or split the file across days.
+### Changing the model means re-indexing
+
+Vectors are only comparable within one model's vector space. Switching models
+does not degrade retrieval, it invalidates it — and because dimensions can happen
+to match, the failure is silent. Each index therefore records which model built
+it in `embedding.json`, and searching an index built by a different model is
+refused with an explanation.
+
+Uploaded files are kept, so re-indexing needs no re-uploading:
+
+```bash
+cd backend && .venv/bin/python scripts/reindex.py             # everything
+cd backend && .venv/bin/python scripts/reindex.py --collection 3
+```
+
+## Web search
+
+Web search is a property of the model, not a setting the app can apply to
+anything. Groq performs search and page fetching server side, and only for its
+Compound systems — `groq/compound` and `groq/compound-mini`. Every other model
+can answer only from its training data.
+
+So the control is enabled for those two and disabled elsewhere, with a tooltip
+saying why, and the server clears the flag if you switch to a model that cannot
+search. The capability is read from the advertised model list rather than a
+second constant, so what the UI offers and what the server enforces cannot drift
+apart. Pages actually consulted are reported by the provider in `executed_tools`
+and shown in the sources panel as links, rather than being parsed back out of the
+answer text.
+
+**On a small Groq tier, expect searches to fail sometimes.** Groq returns `413
+Request Entity Too Large` when a *single* request exceeds the account's
+per-minute token allowance, and a Compound run pulls whole pages into the prompt
+— one long page is enough. Measured on a free tier, `groq/compound-mini`
+succeeded on 2 of 3 questions where `groq/compound` managed 1 of 3, because mini
+makes fewer tool calls; mini is listed first for that reason. The failure is
+translated into an explanation rather than shown as a raw status code, which
+would read like an upload-size problem.
 
 ## Notes and limits
 
-- **Provider model retirement is a live issue.** `text-embedding-004` was withdrawn during development, and Groq rotates chat model ids. Chat models self-heal via discovery; embeddings do not. If ingest starts failing with a 404 naming the model, list what your key can reach with `curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GOOGLE_API_KEY"` and set `EMBEDDING_MODEL`. Changing it changes the vector dimensions, so delete `backend/data/indexes/` and re-upload.
-- **Very large documents are slow on a free key.** See [Indexing large documents](#indexing-large-documents). A file that exhausts the retry budget is marked `failed`, and its partial vectors are removed so the index never holds chunks no document references.
+- **Provider model retirement is a live issue.** `text-embedding-004` was withdrawn during development, and Groq rotates chat model ids. Chat models self-heal via runtime discovery. Local embeddings are pinned to a downloaded model and cannot be retired underneath you, which is a further argument for the default.
+- **Indexing speed is now CPU-bound, not quota-bound.** Roughly 11 chunks/sec, so a very large PDF takes minutes rather than failing. See [Embeddings](#embeddings).
 - **Scanned PDFs need OCR first.** Image-only pages yield no text; the document is marked `failed` with that explanation rather than silently indexing nothing.
-- **Uploaded text is sent to Google** for embedding. If that is unacceptable, swap `get_embeddings()` in `backend/app/services/vectorstore.py` for a local model such as `fastembed` — it is the only place embeddings are constructed.
+- **Uploaded text never leaves the machine by default.** Only the retrieved passages go out, in the prompt to Groq. Setting `EMBEDDING_PROVIDER=google` sends document text to Google as well.
+- **Web search is unreliable on a small Groq tier.** See [Web search](#web-search).
 - **Account linking requires a verified email.** A provider reporting an unverified address is refused, so nobody can claim an existing account by registering its address elsewhere.
 - **SQLite suits a small deployment.** For many concurrent writers, move to Postgres; the FAISS indexes would then want shared storage or a hosted vector database.
 - **Ingest runs in-process** as a FastAPI background task. Fine for modest files; a large corpus wants a real task queue.

@@ -45,6 +45,7 @@ export interface Chat {
   collection_id: number;
   title: string;
   model: string;
+  web_search: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -54,6 +55,8 @@ export interface Source {
   filename: string;
   page: number | null;
   snippet: string;
+  /** Set for web results; null for a passage from an uploaded document. */
+  url: string | null;
 }
 
 export interface Message {
@@ -63,12 +66,15 @@ export interface Message {
   sources: Source[];
   input_tokens: number | null;
   output_tokens: number | null;
+  duration_ms: number | null;
   created_at: string;
 }
 
 export interface ModelInfo {
   id: string;
   label: string;
+  /** False for models the provider cannot web search with. */
+  supports_web_search: boolean;
 }
 
 export interface Health {
@@ -96,4 +102,9 @@ export type StreamEvent =
       failed: boolean;
       input_tokens: number | null;
       output_tokens: number | null;
+      duration_ms: number | null;
     };
+
+export interface Suggestions {
+  suggestions: string[];
+}

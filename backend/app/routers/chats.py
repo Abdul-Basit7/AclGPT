@@ -1,16 +1,24 @@
 import json
 import logging
+import time
 from typing import Iterator, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
 from ..deps import get_current_user, owned_chat
 from ..models import Chat, Collection, Message, User, utcnow
-from ..schemas import ChatCreate, ChatOut, ChatUpdate, MessageCreate, MessageOut
+from ..schemas import (
+    ChatCreate,
+    ChatOut,
+    ChatUpdate,
+    MessageCreate,
+    MessageOut,
+    SuggestionsOut,
+)
 from ..services import llm as llm_service
 from ..services import rag
 
@@ -52,6 +60,7 @@ def create_chat(
         title=(payload.title or UNTITLED).strip() or UNTITLED,
         model=llm_service.resolve_model(payload.model or ""),
     )
+    chat.web_search = payload.web_search and llm_service.supports_web_search(chat.model)
     db.add(chat)
     db.commit()
     db.refresh(chat)
@@ -68,6 +77,12 @@ def update_chat(
         chat.title = payload.title.strip()
     if payload.model is not None:
         chat.model = llm_service.resolve_model(payload.model)
+    if payload.web_search is not None:
+        chat.web_search = payload.web_search
+    # Switching to a model that cannot search must not leave the flag set, or the
+    # UI would show web search on for a model that silently ignores it.
+    if not llm_service.supports_web_search(chat.model):
+        chat.web_search = False
     db.commit()
     db.refresh(chat)
     return chat
@@ -90,6 +105,52 @@ def list_messages(
             select(Message).where(Message.chat_id == chat.id).order_by(Message.id)
         ).all()
     )
+
+
+@router.get("/{chat_id}/suggestions", response_model=SuggestionsOut)
+def chat_suggestions(
+    chat: Chat = Depends(owned_chat), db: Session = Depends(get_db)
+) -> SuggestionsOut:
+    """Three things worth asking next, drawn from this chat and its documents."""
+    history: List[Tuple[str, str]] = [
+        (m.role, m.content)
+        for m in db.scalars(
+            select(Message).where(Message.chat_id == chat.id).order_by(Message.id)
+        ).all()
+    ]
+    return SuggestionsOut(
+        suggestions=rag.suggest_questions(chat.collection_id, history, chat.model)
+    )
+
+
+@router.delete(
+    "/{chat_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_from_message(
+    message_id: int,
+    chat: Chat = Depends(owned_chat),
+    db: Session = Depends(get_db),
+) -> None:
+    """
+    Drop a message and everything after it. Editing a question rewrites history
+    from that point, so the stale answer -- and any turns built on it -- go too.
+    """
+    target = db.get(Message, message_id)
+    if target is None or target.chat_id != chat.id:
+        raise HTTPException(status_code=404, detail="Message not found.")
+
+    db.execute(
+        delete(Message).where(Message.chat_id == chat.id, Message.id >= message_id)
+    )
+    remaining = db.scalar(
+        select(Message.id).where(Message.chat_id == chat.id).limit(1)
+    )
+    # The title is taken from the first question; with none left, let the next
+    # one claim it rather than keeping the title of a deleted message.
+    if remaining is None:
+        chat.title = UNTITLED
+    chat.updated_at = utcnow()
+    db.commit()
 
 
 @router.post("/{chat_id}/messages")
@@ -122,6 +183,7 @@ def send_message(
     chat_id = chat.id
     collection_id = chat.collection_id
     model = chat.model
+    web_search = chat.web_search
     user_message_id = user_message.id
 
     def event_stream() -> Iterator[str]:
@@ -130,9 +192,12 @@ def send_message(
         sources: List[dict] = []
         usage: dict = {}
         failed = False
+        started = time.monotonic()
 
         try:
-            for event in rag.stream_answer(collection_id, question, history, model):
+            for event in rag.stream_answer(
+                collection_id, question, history, model, web_search=web_search
+            ):
                 if event["type"] == "sources":
                     sources = event["sources"]
                 elif event["type"] == "usage":
@@ -143,8 +208,9 @@ def send_message(
         except Exception as exc:
             failed = True
             logger.exception("Streaming failed for chat %s", chat_id)
-            yield _sse({"type": "error", "detail": str(exc)})
+            yield _sse({"type": "error", "detail": llm_service.friendly_error(exc)})
 
+        duration_ms = int((time.monotonic() - started) * 1000)
         answer = "".join(parts)
         message_id = None
         if answer.strip():
@@ -158,6 +224,7 @@ def send_message(
                     sources=sources,
                     input_tokens=usage.get("input_tokens"),
                     output_tokens=usage.get("output_tokens"),
+                    duration_ms=duration_ms,
                 )
                 session.add(message)
                 stored_chat = session.get(Chat, chat_id)
@@ -179,6 +246,7 @@ def send_message(
                 "failed": failed,
                 "input_tokens": usage.get("input_tokens"),
                 "output_tokens": usage.get("output_tokens"),
+                "duration_ms": duration_ms,
             }
         )
 

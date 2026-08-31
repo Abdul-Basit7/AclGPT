@@ -8,6 +8,7 @@ import type {
   ModelInfo,
   Provider,
   StreamEvent,
+  Suggestions,
   User,
 } from "./types";
 
@@ -113,14 +114,23 @@ export const api = {
 
   listChats: (token: string) => request<Chat[]>("/chats", { token }),
 
-  createChat: (token: string, collectionId: number, model?: string) =>
+  createChat: (
+    token: string,
+    collectionId: number,
+    model?: string,
+    webSearch?: boolean,
+  ) =>
     request<Chat>("/chats", {
       method: "POST",
-      body: { collection_id: collectionId, model },
+      body: { collection_id: collectionId, model, web_search: webSearch ?? false },
       token,
     }),
 
-  updateChat: (token: string, id: number, patch: { title?: string; model?: string }) =>
+  updateChat: (
+    token: string,
+    id: number,
+    patch: { title?: string; model?: string; web_search?: boolean },
+  ) =>
     request<Chat>(`/chats/${id}`, { method: "PATCH", body: patch, token }),
 
   deleteChat: (token: string, id: number) =>
@@ -128,6 +138,21 @@ export const api = {
 
   listMessages: (token: string, chatId: number) =>
     request<Message[]>(`/chats/${chatId}/messages`, { token }),
+
+  /** Follow-up questions for an open chat, drawn from its history and documents. */
+  chatSuggestions: (token: string, chatId: number) =>
+    request<Suggestions>(`/chats/${chatId}/suggestions`, { token }),
+
+  /** Opening questions for a collection, before any chat exists to base them on. */
+  collectionSuggestions: (token: string, collectionId: number) =>
+    request<Suggestions>(`/collections/${collectionId}/suggestions`, { token }),
+
+  /** Drop a message and every turn after it -- how an edited question rewinds. */
+  deleteMessagesFrom: (token: string, chatId: number, messageId: number) =>
+    request<void>(`/chats/${chatId}/messages/${messageId}`, {
+      method: "DELETE",
+      token,
+    }),
 };
 
 /**

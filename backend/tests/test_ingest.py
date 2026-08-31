@@ -11,7 +11,13 @@ from app.services import extract, ingest
 
 @pytest.fixture(autouse=True)
 def fast_limiter(monkeypatch):
-    """Remove the pacing delay so tests are not wall-clock bound."""
+    """Remove the pacing delay so tests are not wall-clock bound.
+
+    These tests cover the *remote* provider path -- batching, pacing and
+    retries all exist to survive a quota. The local path is covered separately
+    below.
+    """
+    monkeypatch.setattr(settings, "embedding_provider", "google")
     monkeypatch.setattr(ingest._limiter, "_interval_per_unit", 0.0)
     monkeypatch.setattr(ingest.time, "sleep", lambda _seconds: None)
 
@@ -329,3 +335,50 @@ def test_daily_and_minute_quotas_are_distinguished():
     assert not ingest._is_daily_quota(minute)
     assert ingest._is_rate_limit(minute), "per-minute limits are retryable"
     assert "per-minute" in ingest._friendly_error(minute)
+
+
+# --- local embeddings ---
+
+
+def test_local_provider_is_not_paced(monkeypatch):
+    """A local model has no quota, so reserving slots would only add delay."""
+    monkeypatch.setattr(settings, "embedding_provider", "local")
+    monkeypatch.setattr(settings, "local_embed_batch_size", 128)
+    monkeypatch.setattr(ingest.vectorstore, "add_documents", lambda *a: None)
+
+    reserved = []
+    monkeypatch.setattr(
+        ingest._limiter, "reserve", lambda units=1: reserved.append(units)
+    )
+
+    chunks, ids = make_chunks(300)
+    ingest._embed_in_batches(1, chunks, ids, lambda _n: None)
+    assert reserved == [], "local embedding must not go through the rate limiter"
+
+
+def test_local_provider_uses_large_batches(monkeypatch):
+    monkeypatch.setattr(settings, "embedding_provider", "local")
+    monkeypatch.setattr(settings, "local_embed_batch_size", 128)
+    calls = []
+    monkeypatch.setattr(
+        ingest.vectorstore,
+        "add_documents",
+        lambda cid, docs, ids: calls.append(len(docs)),
+    )
+
+    chunks, ids = make_chunks(300)
+    ingest._embed_in_batches(1, chunks, ids, lambda _n: None)
+    assert calls == [128, 128, 44]
+
+
+def test_batch_size_follows_the_provider(monkeypatch):
+    monkeypatch.setattr(settings, "embed_batch_size", 8)
+    monkeypatch.setattr(settings, "local_embed_batch_size", 256)
+
+    monkeypatch.setattr(settings, "embedding_provider", "local")
+    assert settings.embeddings_are_local
+    assert settings.effective_embed_batch_size == 256
+
+    monkeypatch.setattr(settings, "embedding_provider", "google")
+    assert not settings.embeddings_are_local
+    assert settings.effective_embed_batch_size == 8

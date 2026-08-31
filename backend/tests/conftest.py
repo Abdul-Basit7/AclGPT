@@ -30,6 +30,8 @@ FAKE_ANSWER = "ACL rehab takes months (notes.md, page 1)."
 TEST_MODELS = [
     ModelInfo(id="test-model-a", label="Test A"),
     ModelInfo(id="test-model-b", label="Test B"),
+    # Stands in for a Compound system, so web-search gating can be tested.
+    ModelInfo(id="test-searcher", label="Test Searcher", supports_web_search=True),
 ]
 _emails = itertools.count()
 
@@ -47,7 +49,7 @@ def fake_providers(monkeypatch):
     monkeypatch.setattr(
         llm_service,
         "get_llm",
-        lambda model: GenericFakeChatModel(
+        lambda model, web_search=False: GenericFakeChatModel(
             messages=itertools.repeat(AIMessage(content=FAKE_ANSWER))
         ),
     )

@@ -56,4 +56,10 @@ def test_health_reports_configuration(client):
     assert body["status"] == "ok"
     assert body["google_key_configured"] is True
     assert body["groq_key_configured"] is True
-    assert [m["id"] for m in body["models"]] == ["test-model-a", "test-model-b"]
+    assert [m["id"] for m in body["models"]] == [
+        "test-model-a",
+        "test-model-b",
+        "test-searcher",
+    ]
+    # The UI needs to know which models it may offer web search for.
+    assert [m["supports_web_search"] for m in body["models"]] == [False, False, True]

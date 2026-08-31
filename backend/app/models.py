@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -112,6 +113,9 @@ class Chat(Base):
     )
     title: Mapped[str] = mapped_column(String(200), default="New chat")
     model: Mapped[str] = mapped_column(String(80), default="")
+    # Whether to let the model search the web. Only honoured for models that
+    # support it; see services.llm.supports_web_search.
+    web_search: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -137,6 +141,8 @@ class Message(Base):
     # Token accounting, reported by the provider on the final stream chunk.
     input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Wall-clock time spent generating this answer, measured server side.
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
