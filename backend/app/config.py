@@ -77,7 +77,12 @@ class Settings(BaseSettings):
     embed_max_retries: int = 8
 
     # A local model has no quota, so batches are large and nothing is paced.
-    local_embed_batch_size: int = 256
+    # Measured in a 512MB container, the size a free host gives you: a batch of
+    # 256 is OOM-killed part way through a 3,000-chunk document, while 32 fits.
+    # Throughput is the same either way -- about 10 chunks/sec -- because the
+    # model, not the batch, is the bottleneck. So there is nothing to gain from
+    # a larger batch and a deployment to lose.
+    local_embed_batch_size: int = 32
 
     @property
     def embeddings_are_local(self) -> bool:

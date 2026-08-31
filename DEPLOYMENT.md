@@ -107,6 +107,25 @@ docker run --rm -p 8099:8000 \
 Open http://localhost:8099. The named volume means data survives
 `docker restart`, exactly as it will in production.
 
+## Memory
+
+Measured against a 512MB container, which is what a free host gives you:
+
+| | |
+| --- | --- |
+| Idle | ~200MB |
+| Answering a question | ~400MB |
+| Ingesting a 3,000-chunk document | right at the limit |
+
+`LOCAL_EMBED_BATCH_SIZE` is the knob. At the old default of 256 a large ingest is
+**OOM-killed**; at 32 it completes, at the same ~10 chunks/sec, because the model
+rather than the batch size is the bottleneck. 32 is now the default. Lower it
+further if a host kills the process, raise it only where memory is plentiful.
+
+Note the interaction with the stuck-ingest bug below: if the process is killed
+mid-ingest, the document is left in `processing` for ever, with no way to retry
+from the UI.
+
 ## Notes on the image
 
 - **Python 3.11+ with `faiss-cpu` 1.13.** Version 1.9 fails to import on Linux
