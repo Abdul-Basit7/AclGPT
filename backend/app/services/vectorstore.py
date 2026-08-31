@@ -52,12 +52,16 @@ def get_embeddings() -> Embeddings:
     if settings.embeddings_are_local:
         from langchain_community.embeddings import FastEmbedEmbeddings
 
+        options = {}
+        if settings.embedding_cache_dir is not None:
+            options["cache_dir"] = str(settings.embedding_cache_dir)
         return FastEmbedEmbeddings(
             model_name=settings.local_embedding_model,
             # Documents are embedded in large batches during ingest; letting
             # onnxruntime use several threads is the difference between minutes
             # and tens of minutes on a big file.
             threads=None,
+            **options,
         )
 
     from langchain_google_genai import GoogleGenerativeAIEmbeddings

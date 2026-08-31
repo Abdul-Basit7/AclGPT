@@ -1,0 +1,42 @@
+# Fly.io, single machine with a volume. The volume is the point: uploads, the
+# SQLite database and the FAISS indexes are all files, so without one they are
+# wiped on every redeploy.
+#
+#   fly launch --no-deploy --copy-config
+#   fly volumes create sourcery_data --size 1 --region lhr
+#   fly secrets set GROQ_API_KEY=... SECRET_KEY=...
+#   fly deploy
+
+app = "sourcery"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATA_DIR = "/data"
+  # Must match the deployed URL, or the OAuth redirect lands nowhere.
+  FRONTEND_URL = "https://sourcery.fly.dev"
+  CORS_ORIGINS = "https://sourcery.fly.dev"
+
+[[mounts]]
+  source = "sourcery_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Suspend when idle rather than stopping, so a cold request does not pay for a
+  # full boot. The volume survives either way.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # Never raise this above 1. The FAISS indexes are held in the process and
+  # guarded by in-process locks, and the volume attaches to one machine only, so
+  # a second machine would both race the first and see different data.
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # onnxruntime, faiss and the embedding model all sit in memory together. 512MB
+  # is the practical floor; raise it if ingest of a large document gets killed.
+  memory = "512mb"

@@ -1,0 +1,31 @@
+# Render, free plan. Easiest way to get a URL, with one significant caveat:
+# free instances have an ephemeral filesystem and cannot mount a disk, so the
+# database, uploads and indexes are wiped on every redeploy and restart. Fine to
+# demonstrate the app, not fine to keep anything.
+#
+# To keep data, change the plan to "starter" and uncomment the disk block, or
+# deploy to Fly instead (see fly.toml).
+
+services:
+  - type: web
+    name: sourcery
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: GROQ_API_KEY
+        sync: false          # set in the dashboard, never in this file
+      - key: SECRET_KEY
+        generateValue: true  # Render generates and stores a strong value
+      - key: FRONTEND_URL
+        fromService:
+          type: web
+          name: sourcery
+          property: host
+    # disk:
+    #   name: sourcery-data
+    #   mountPath: /data
+    #   sizeGB: 1

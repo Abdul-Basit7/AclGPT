@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # about one point of retrieval quality. Indexing speed matters more on large
     # files, so small is the default; set LOCAL_EMBEDDING_MODEL to override.
     local_embedding_model: str = "BAAI/bge-small-en-v1.5"
+    # Where the downloaded model lives. fastembed defaults to a temp directory,
+    # which a container wipes on restart -- so every cold start would re-download
+    # 67 MB, and a host without access to Hugging Face would fail outright. The
+    # Docker image bakes the model in and points this at it.
+    embedding_cache_dir: Optional[Path] = None
     # Only used when embedding_provider == "google".
     embedding_model: str = "models/gemini-embedding-001"
     chunk_size: int = 1000

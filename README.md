@@ -303,6 +303,19 @@ makes fewer tool calls; mini is listed first for that reason. The failure is
 translated into an explanation rather than shown as a raw status code, which
 would read like an upload-size problem.
 
+## Deploying
+
+One Docker image serves the API and the built frontend together. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for the full walkthrough; the short version is
+that FAISS indexes and SQLite are files on disk, so the deployment needs a
+persistent volume and exactly one instance. Most free tiers give neither.
+
+```bash
+docker build -t sourcery:local .
+docker run --rm -p 8099:8000 -v sourcery-data:/data \
+  -e GROQ_API_KEY=your_key -e SECRET_KEY=local sourcery:local
+```
+
 ## Notes and limits
 
 - **Provider model retirement is a live issue.** `text-embedding-004` was withdrawn during development, and Groq rotates chat model ids. Chat models self-heal via runtime discovery. Local embeddings are pinned to a downloaded model and cannot be retired underneath you, which is a further argument for the default.
